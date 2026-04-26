@@ -1,0 +1,129 @@
+name: Build Windows Portable App
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout this repository ──────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Checkout pdfcrop Rust library (needed to build WASM) ──────────
+      - name: Checkout pdfcrop Rust library
+        uses: actions/checkout@v4
+        with:
+          repository: pdfcrop/pdfcrop
+          path: pdfcrop-rust
+          ref: main
+
+      # ── 3. Set up Rust toolchain with wasm32 target ───────────────────────
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            pdfcrop-rust/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('pdfcrop-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # ── 4. Install wasm-pack ──────────────────────────────────────────────
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      # ── 5. Build WASM module ──────────────────────────────────────────────
+      #    Run from pdfcrop-rust root; output goes to ../pkg (our project root)
+      - name: Build WASM module
+        run: |
+          cd pdfcrop-rust
+          wasm-pack build --target web --release --out-dir ../pkg
+          echo "WASM build complete. pkg/ contents:"
+          ls -la ../pkg/
+
+      # ── 6. Set up Node.js ─────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 7. Install npm dependencies ───────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 8. Build the web app with Vite ────────────────────────────────────
+      - name: Build web app
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Verify resources/ output
+        run: |
+          echo "resources/ contents:"
+          ls -la resources/
+          echo "resources/assets/ contents (if exists):"
+          ls -la resources/assets/ 2>/dev/null || echo "(no assets dir)"
+
+      # ── 9. Download Neutralinojs binaries and build the desktop app ───────
+      - name: Download Neutralinojs binaries
+        run: npx neu update
+
+      - name: Build Neutralinojs Windows app
+        run: npx neu build --release
+
+      - name: List build output
+        run: |
+          echo "dist/ contents:"
+          find dist/ -type f | sort
+
+      # ── 10. Package Windows portable app ─────────────────────────────────
+      - name: Package Windows portable app
+        run: |
+          mkdir -p release/pdfcrop-windows-portable
+          # Copy Windows executable
+          cp dist/pdfcrop/pdfcrop-win_x64.exe release/pdfcrop-windows-portable/pdfcrop.exe
+          # Copy shared resources
+          cp dist/pdfcrop/resources.neu release/pdfcrop-windows-portable/
+          # Copy WebView2 loader if present
+          if [ -f "dist/pdfcrop/WebView2Loader.dll" ]; then
+            cp dist/pdfcrop/WebView2Loader.dll release/pdfcrop-windows-portable/
+          fi
+          echo "Windows portable package contents:"
+          ls -la release/pdfcrop-windows-portable/
+
+      - name: Create ZIP archive
+        run: |
+          cd release
+          zip -r pdfcrop-windows-portable.zip pdfcrop-windows-portable/
+          echo "ZIP created: $(du -sh pdfcrop-windows-portable.zip)"
+
+      # ── 11. Upload artifact ───────────────────────────────────────────────
+      - name: Upload Windows portable app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfcrop-windows-portable
+          path: release/pdfcrop-windows-portable.zip
+          retention-days: 30
+
+      # ── 12. (Optional) Upload debug info ─────────────────────────────────
+      - name: Upload full dist for debugging
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dist-debug
+          path: dist/
+          retention-days: 7
