@@ -79,11 +79,11 @@ jobs:
           ls -la resources/assets/ 2>/dev/null || echo "(no assets dir)"
 
       # ── 9. Download Neutralinojs binaries and build the desktop app ───────
-      - name: Download Neutralinojs binaries
-        run: npx neu update
+      - name: Download Neutralinojs binaries (latest)
+        run: npx neu update --latest
 
       - name: Build Neutralinojs Windows app
-        run: npx neu build --release
+        run: npx neu build
 
       - name: List build output
         run: |
